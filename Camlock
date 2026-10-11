@@ -1,0 +1,75 @@
+local Players, RunService, UIS, Stats = game:GetService("Players"), game:GetService("RunService"), game:GetService("UserInputService"), game:GetService("Stats")
+local player, camera = Players.LocalPlayer, workspace.CurrentCamera
+
+local CFG = {
+	AimPart = "HumanoidRootPart", -- "Humanoid" = Humanoid.RootPart, or a part name like "Head"
+	Smooth = 0.4, ProjSpeed = 0, Predict = 1, MaxDist = 300, FOV = 300,
+	TeamCheck = false, WallCheck = false,
+	MacroInterval = 0.08, MacroBoost = 22, MacroMax = 45,
+	DragThreshold = 8,
+}
+local GREEN, RED = Color3.fromRGB(0, 255, 0), Color3.fromRGB(255, 0, 0)
+local state, target = { cam = false, macro = false }, nil
+
+local gui = Instance.new("ScreenGui")
+gui.Name, gui.ResetOnSpawn, gui.Parent = "CamlockGui", false, player:WaitForChild("PlayerGui")
+
+-- Black draggable toggle button: tap = toggle, drag = move
+local function makeToggle(y, label, key)
+	local b = Instance.new("TextButton")
+	b.Size, b.Position = UDim2.fromOffset(160, 45), UDim2.new(0.5, -80, 0.2, y)
+	b.BackgroundColor3, b.BorderSizePixel, b.AutoButtonColor = Color3.new(0, 0, 0), 0, false
+	b.Font, b.TextSize, b.TextColor3, b.Text = Enum.Font.GothamBold, 16, RED, label .. "Deactivated"
+	b.Parent = gui
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+
+	local active, startIn, startPos, moved
+	b.InputBegan:Connect(function(i)
+		if active or not (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then return end
+		active, startIn, startPos, moved = i, i.Position, b.Position, false
+		i.Changed:Connect(function()
+			if i.UserInputState ~= Enum.UserInputState.End then return end
+			active = nil
+			if not moved then
+				state[key], target = not state[key], nil
+				b.Text = label .. (state[key] and "Activate" or "Deactivated")
+				b.TextColor3 = state[key] and GREEN or RED
+			end
+		end)
+	end)
+	UIS.InputChanged:Connect(function(i)
+		if not active or not (i == active or i.UserInputType == Enum.UserInputType.MouseMovement) then return end
+		local d = i.Position - startIn
+		moved = moved or d.Magnitude >= CFG.DragThreshold
+		if moved then
+			b.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+end
+
+makeToggle(0, "", "cam")
+makeToggle(55, "Macro: ", "macro")
+
+-- Targeting
+local function aimPart(char)
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return end
+	return CFG.AimPart ~= "Humanoid" and char:FindFirstChild(CFG.AimPart) or hum.RootPart
+end
+
+local function valid(plr)
+	if plr == player or (CFG.TeamCheck and plr.Team and plr.Team == player.Team) then return false end
+	local part = aimPart(plr.Character)
+	if not part then return false end
+	local origin = camera.CFrame.Position
+	if (part.Position - origin).Magnitude > CFG.MaxDist then return false end
+	if not CFG.WallCheck then return true end
+	local p = RaycastParams.new()
+	p.FilterType, p.FilterDescendantsInstances = Enum.RaycastFilterType.Exclude, { player.Character }
+	local hit = workspace:Raycast(origin, part.Position - origin, p)
+	return not hit or hit.Instance:IsDescendantOf(plr.Character)
+end
+
+local function pickTarget()
+	local best, bestD, center = nil, CFG.FOV, camera.ViewportSize / 2
+	for _, plr in Players:GetPlayers()
